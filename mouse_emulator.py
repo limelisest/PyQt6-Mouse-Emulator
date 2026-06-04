@@ -71,6 +71,7 @@ class MouseEmulatorThread(QThread):
             'up': 'w', 'down': 's', 'left': 'a', 'right': 'd',
             'click_l': '[', 'click_r': ']',
             'scroll_up': 'p', 'scroll_down': ';',
+            'center_window': 'c',
         }
 
         # ── 底层虚拟键码配置 ──
@@ -79,6 +80,7 @@ class MouseEmulatorThread(QThread):
             'up': 87, 'down': 83, 'left': 65, 'right': 68,
             'click_l': 219, 'click_r': 221,
             'scroll_up': 80, 'scroll_down': 186,
+            'center_window': 67,
         }
         self.vk_to_action = {v: k for k, v in self.vk_config.items()}
 

@@ -132,6 +132,7 @@ class MainWindow(MSFluentWindow):
         self._create_key_btn(key_layout, "右键拖拽/点击", "click_r", self.emulator.keys_config['click_r'])
         self._create_key_btn(key_layout, "滚轮向上", "scroll_up", self.emulator.keys_config['scroll_up'])
         self._create_key_btn(key_layout, "滚轮向下", "scroll_down", self.emulator.keys_config['scroll_down'])
+        self._create_key_btn(key_layout, "窗口居中", "center_window", self.emulator.keys_config['center_window'])
 
         left.addWidget(key_card)
 
@@ -531,12 +532,11 @@ class MainWindow(MSFluentWindow):
                 self.emulator.mod_vk = vk
         else:
             self.emulator.keys_config[target_id] = key_id
+            if vk is None and len(key_id) == 1:
+                vk = ord(key_id.upper())
             if vk is not None:
-                old_vk = self.emulator.vk_config.get(target_id)
-                if old_vk is not None and old_vk in self.emulator.vk_to_action:
-                    del self.emulator.vk_to_action[old_vk]
                 self.emulator.vk_config[target_id] = vk
-                self.emulator.vk_to_action[vk] = target_id
+                self.emulator.vk_to_action = {v: k for k, v in self.emulator.vk_config.items()}
         self._save_config()
 
     # ══════════════════════════ 键盘监听 ══════════════════════════
@@ -710,6 +710,8 @@ class MainWindow(MSFluentWindow):
             self.emulator.mouse_ctrl.scroll(0, self.emulator.scroll_step)
         elif action == 'scroll_down':
             self.emulator.mouse_ctrl.scroll(0, -self.emulator.scroll_step)
+        elif action == 'center_window':
+            self._center_cursor()
 
     def _trigger_action_release(self, action):
         if action in ('up', 'down', 'left', 'right'):
@@ -878,10 +880,8 @@ class MainWindow(MSFluentWindow):
         saved_vks = cfg.get('vk_config', {})
         for action, vk in saved_vks.items():
             if action in self.emulator.vk_config and vk:
-                old_vk = self.emulator.vk_config[action]
-                self.emulator.vk_to_action.pop(old_vk, None)
                 self.emulator.vk_config[action] = int(vk)
-                self.emulator.vk_to_action[int(vk)] = action
+        self.emulator.vk_to_action = {v: k for k, v in self.emulator.vk_config.items()}
         mod_id = cfg.get('mod_key_id', 'menu')
         self.emulator.mod_key_id = mod_id
         self.emulator.mod_vk = cfg.get('mod_vk', 93)
@@ -931,11 +931,13 @@ class MainWindow(MSFluentWindow):
             'up': 'w', 'down': 's', 'left': 'a', 'right': 'd',
             'click_l': '[', 'click_r': ']',
             'scroll_up': 'p', 'scroll_down': ';',
+            'center_window': 'c',
         }
         default_vks = {
             'up': 87, 'down': 83, 'left': 65, 'right': 68,
             'click_l': 219, 'click_r': 221,
             'scroll_up': 80, 'scroll_down': 186,
+            'center_window': 67,
         }
         self.emulator.keys_config = dict(default_keys)
         self.emulator.vk_config = dict(default_vks)
