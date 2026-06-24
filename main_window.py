@@ -35,9 +35,23 @@ ICON_PATH = _resource_path('icon.png')
 CONFIG_DIR = os.path.join(os.getenv('APPDATA', os.path.expanduser('~')), 'MouseController')
 os.makedirs(CONFIG_DIR, exist_ok=True)
 CONFIG_PATH = os.path.join(CONFIG_DIR, 'config.json')
-STARTUP_DIR = os.path.join(os.getenv('APPDATA', ''),
-                           r'Microsoft\Windows\Start Menu\Programs\Startup')
-STARTUP_LINK = os.path.join(STARTUP_DIR, 'MouseController.bat')
+
+RUN_REG_KEY = r'Software\Microsoft\Windows\CurrentVersion\Run'
+
+
+def _check_boot_reg():
+    import winreg
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_REG_KEY, 0, winreg.KEY_QUERY_VALUE)
+        try:
+            val, _ = winreg.QueryValueEx(key, 'MouseController')
+            return val == sys.executable
+        except FileNotFoundError:
+            return False
+        finally:
+            winreg.CloseKey(key)
+    except Exception:
+        return False
 
 
 class MainWindow(MSFluentWindow):
@@ -133,6 +147,8 @@ class MainWindow(MSFluentWindow):
         self._create_key_btn(key_layout, "滚轮向上", "scroll_up", self.emulator.keys_config['scroll_up'])
         self._create_key_btn(key_layout, "滚轮向下", "scroll_down", self.emulator.keys_config['scroll_down'])
         self._create_key_btn(key_layout, "窗口居中", "center_window", self.emulator.keys_config['center_window'])
+        self._create_key_btn(key_layout, "后退键 (侧键)", "back", self.emulator.keys_config['back'])
+        self._create_key_btn(key_layout, "前进键 (侧键)", "forward", self.emulator.keys_config['forward'])
 
         left.addWidget(key_card)
 
@@ -156,7 +172,7 @@ class MainWindow(MSFluentWindow):
         boot_row.addWidget(BodyLabel("开机自启:", self))
         boot_row.addStretch(1)
         self.boot_switch = SwitchButton(self)
-        self.boot_switch.setChecked(os.path.exists(STARTUP_LINK))
+        self.boot_switch.setChecked(_check_boot_reg())
         self.boot_switch.checkedChanged.connect(self._toggle_boot)
         boot_row.addWidget(self.boot_switch)
         settings_layout.addLayout(boot_row)
@@ -710,6 +726,12 @@ class MainWindow(MSFluentWindow):
             self.emulator.mouse_ctrl.scroll(0, self.emulator.scroll_step)
         elif action == 'scroll_down':
             self.emulator.mouse_ctrl.scroll(0, -self.emulator.scroll_step)
+        elif action == 'back' and not self.emulator.is_back_pressed:
+            self.emulator.is_back_pressed = True
+            self.emulator.mouse_ctrl.press(mouse.Button.x1)
+        elif action == 'forward' and not self.emulator.is_forward_pressed:
+            self.emulator.is_forward_pressed = True
+            self.emulator.mouse_ctrl.press(mouse.Button.x2)
         elif action == 'center_window':
             self._center_cursor()
 
@@ -722,6 +744,12 @@ class MainWindow(MSFluentWindow):
         elif action == 'click_r' and self.emulator.is_right_pressed:
             self.emulator.mouse_ctrl.release(mouse.Button.right)
             self.emulator.is_right_pressed = False
+        elif action == 'back' and self.emulator.is_back_pressed:
+            self.emulator.mouse_ctrl.release(mouse.Button.x1)
+            self.emulator.is_back_pressed = False
+        elif action == 'forward' and self.emulator.is_forward_pressed:
+            self.emulator.mouse_ctrl.release(mouse.Button.x2)
+            self.emulator.is_forward_pressed = False
 
     def _safe_release_mouse(self):
         self.emulator.active_directions.clear()
@@ -731,6 +759,12 @@ class MainWindow(MSFluentWindow):
         if self.emulator.is_right_pressed:
             self.emulator.mouse_ctrl.release(mouse.Button.right)
             self.emulator.is_right_pressed = False
+        if self.emulator.is_back_pressed:
+            self.emulator.mouse_ctrl.release(mouse.Button.x1)
+            self.emulator.is_back_pressed = False
+        if self.emulator.is_forward_pressed:
+            self.emulator.mouse_ctrl.release(mouse.Button.x2)
+            self.emulator.is_forward_pressed = False
 
     def _inject_modifier_tap(self):
         """注入原生修饰键单击"""
@@ -813,7 +847,7 @@ class MainWindow(MSFluentWindow):
         self.exclusive_switch.setChecked(excl)
         self.exclusive_switch.blockSignals(False)
 
-        boot = cfg.get('boot', os.path.exists(STARTUP_LINK))
+        boot = cfg.get('boot', _check_boot_reg())
         self.boot_switch.blockSignals(True)
         self.boot_switch.setChecked(boot)
         self.boot_switch.blockSignals(False)
@@ -919,6 +953,12 @@ class MainWindow(MSFluentWindow):
         self.exclusive_switch.setChecked(True)
         self.exclusive_switch.blockSignals(False)
 
+        # 清除开机自启注册表
+        self._toggle_boot(False)
+        self.boot_switch.blockSignals(True)
+        self.boot_switch.setChecked(False)
+        self.boot_switch.blockSignals(False)
+
         # 重置组合键
         self.emulator.mod_key_id = 'menu'
         self.emulator.mod_vk = 93
@@ -932,12 +972,14 @@ class MainWindow(MSFluentWindow):
             'click_l': '[', 'click_r': ']',
             'scroll_up': 'p', 'scroll_down': ';',
             'center_window': 'c',
+            'back': '-', 'forward': '=',
         }
         default_vks = {
             'up': 87, 'down': 83, 'left': 65, 'right': 68,
             'click_l': 219, 'click_r': 221,
             'scroll_up': 80, 'scroll_down': 186,
             'center_window': 67,
+            'back': 189, 'forward': 187,
         }
         self.emulator.keys_config = dict(default_keys)
         self.emulator.vk_config = dict(default_vks)
@@ -1013,24 +1055,28 @@ class MainWindow(MSFluentWindow):
         except Exception:
             pass
 
-    # ══════════════════════════ 开机启动 ══════════════════════════
+    # ══════════════════════════ 开机启动（注册表） ══════════════════════════
     def _toggle_boot(self, checked):
-        if checked:
-            try:
-                os.makedirs(STARTUP_DIR, exist_ok=True)
+        import winreg
+        key_path = r'Software\Microsoft\Windows\CurrentVersion\Run'
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
+                                 winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE)
+        except Exception:
+            key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
+        try:
+            if checked:
                 exe = sys.executable
-                script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'main.py')
-                bat = f'@echo off\r\nstart "" "{exe}" "{script}"\r\n'
-                with open(STARTUP_LINK, 'w', encoding='utf-8') as f:
-                    f.write(bat)
-            except Exception:
-                self.boot_switch.setChecked(False)
-        else:
-            try:
-                if os.path.exists(STARTUP_LINK):
-                    os.remove(STARTUP_LINK)
-            except Exception:
-                pass
+                winreg.SetValueEx(key, 'MouseController', 0, winreg.REG_SZ, exe)
+            else:
+                try:
+                    winreg.DeleteValue(key, 'MouseController')
+                except FileNotFoundError:
+                    pass
+            winreg.CloseKey(key)
+        except Exception:
+            winreg.CloseKey(key)
+            self.boot_switch.setChecked(not checked)
 
     # ══════════════════════════ 系统托盘 ══════════════════════════
     def _init_tray(self):

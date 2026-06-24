@@ -72,6 +72,7 @@ class MouseEmulatorThread(QThread):
             'click_l': '[', 'click_r': ']',
             'scroll_up': 'p', 'scroll_down': ';',
             'center_window': 'c',
+            'back': '-', 'forward': '=',
         }
 
         # ── 底层虚拟键码配置 ──
@@ -81,6 +82,7 @@ class MouseEmulatorThread(QThread):
             'click_l': 219, 'click_r': 221,
             'scroll_up': 80, 'scroll_down': 186,
             'center_window': 67,
+            'back': 189, 'forward': 187,
         }
         self.vk_to_action = {v: k for k, v in self.vk_config.items()}
 
@@ -90,6 +92,8 @@ class MouseEmulatorThread(QThread):
         self.mod_toggled = False
         self.is_left_pressed = False
         self.is_right_pressed = False
+        self.is_back_pressed = False
+        self.is_forward_pressed = False
 
         # ── 曲线参数（默认线性） ──
         self.curve_type = CURVE_LINEAR
@@ -245,5 +249,9 @@ class MouseEmulatorThread(QThread):
             self.mouse_ctrl.release(mouse.Button.left)
         if self.is_right_pressed:
             self.mouse_ctrl.release(mouse.Button.right)
+        if self.is_back_pressed:
+            self.mouse_ctrl.release(mouse.Button.x1)
+        if self.is_forward_pressed:
+            self.mouse_ctrl.release(mouse.Button.x2)
         self.running = False
         self.wait()
