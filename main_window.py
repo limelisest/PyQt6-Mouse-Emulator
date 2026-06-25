@@ -4,11 +4,11 @@ import json
 import os
 import time
 import ctypes
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent
 from PyQt6.QtGui import QIcon, QAction
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSystemTrayIcon, QMenu, QApplication,
-    QSlider, QLabel,
+    QSlider, QLabel, QScrollArea,
 )
 from qfluentwidgets import (
     SpinBox, DoubleSpinBox, SwitchButton, CardWidget,
@@ -24,6 +24,20 @@ from mouse_emulator import (
     CURVE_LABELS, CURVE_PRESETS,
 )
 from curve_widget import CurveWidget
+from floating_hint import FloatingHint
+from collapsible_section import CollapsibleSection
+
+class _NoWheelFilter(QObject):
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Wheel:
+            event.ignore()
+            return True
+        return super().eventFilter(obj, event)
+
+
+def _no_wheel(widget):
+    widget.installEventFilter(_NoWheelFilter(widget))
+
 
 def _resource_path(relative_path):
     if getattr(sys, 'frozen', False):
@@ -61,7 +75,7 @@ class MainWindow(MSFluentWindow):
         super().__init__()
         self.setWindowTitle("键盘鼠标模拟器")
         self.setWindowIcon(QIcon(ICON_PATH))
-        self.resize(920, 650)
+        self.resize(550, 750)
         self.setMicaEffectEnabled(True)
         self.navigationInterface.hide()
         setTheme(Theme.AUTO)
@@ -89,42 +103,42 @@ class MainWindow(MSFluentWindow):
         self._curve_timer.timeout.connect(self._poll_curve_state)
         self._curve_timer.start(50)
 
+        # ── 浮空提示窗 ──
+        self._floating_hint = FloatingHint()
+
         # ── 定时检查大写锁状态 ──
         self._capslock_timer = QTimer(self)
         self._capslock_timer.timeout.connect(self._poll_capslock_state)
         self._capslock_timer.start(100)
 
+        # ── 定时控制浮空提示窗 ──
+        self._hint_timer = QTimer(self)
+        self._hint_timer.timeout.connect(self._poll_hint_state)
+        self._hint_timer.start(200)
+
     # ══════════════════════════ UI 布局 ══════════════════════════
     def _init_ui(self):
         content = QWidget()
-        root = QHBoxLayout(content)
+        root = QVBoxLayout(content)
         root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(12)
+        root.setSpacing(8)
 
-        # ── 左列：按键绑定 ──
-        left = QVBoxLayout()
-        left.setSpacing(10)
+        root.addWidget(SubtitleLabel("键盘鼠标模拟器", self))
 
-        left.addWidget(SubtitleLabel("键盘鼠标模拟器", self))
-
-        # 启用开关
         sw_row = QHBoxLayout()
         sw_row.addWidget(BodyLabel("启用模拟器:", self))
         self.enable_switch = SwitchButton(self)
         self.enable_switch.checkedChanged.connect(self._toggle_emulator)
         sw_row.addWidget(self.enable_switch)
         sw_row.addStretch(1)
-        left.addLayout(sw_row)
+        root.addLayout(sw_row)
 
-        # 按键绑定卡片
-        key_card = CardWidget(self)
-        key_layout = QVBoxLayout(key_card)
-        key_layout.addWidget(SubtitleLabel("按键绑定", self))
+        # ── 按键设置 ──
+        key_section = CollapsibleSection("按键设置", self)
+        key_cl = key_section.content_layout()
 
-        # 组合键 + 触发模式（同行）
         mod_row = QHBoxLayout()
         mod_row.addWidget(BodyLabel("组合键", self))
-        mod_row.addStretch(1)
         self.mode_combo = ComboBox(self)
         self.mode_combo.addItems(['按住触发', '按下切换', '大写锁模式'])
         self.mode_combo.setCurrentIndex(0)
@@ -136,28 +150,56 @@ class MainWindow(MSFluentWindow):
         mod_btn.clicked.connect(lambda: self._start_recording('mod'))
         self.key_buttons['mod'] = mod_btn
         mod_row.addWidget(mod_btn)
-        key_layout.addLayout(mod_row)
+        key_cl.addLayout(mod_row)
 
-        self._create_key_btn(key_layout, "上移键", "up", self.emulator.keys_config['up'])
-        self._create_key_btn(key_layout, "下移键", "down", self.emulator.keys_config['down'])
-        self._create_key_btn(key_layout, "左移键", "left", self.emulator.keys_config['left'])
-        self._create_key_btn(key_layout, "右移键", "right", self.emulator.keys_config['right'])
-        self._create_key_btn(key_layout, "左键拖拽/点击", "click_l", self.emulator.keys_config['click_l'])
-        self._create_key_btn(key_layout, "右键拖拽/点击", "click_r", self.emulator.keys_config['click_r'])
-        self._create_key_btn(key_layout, "滚轮向上", "scroll_up", self.emulator.keys_config['scroll_up'])
-        self._create_key_btn(key_layout, "滚轮向下", "scroll_down", self.emulator.keys_config['scroll_down'])
-        self._create_key_btn(key_layout, "窗口居中", "center_window", self.emulator.keys_config['center_window'])
-        self._create_key_btn(key_layout, "后退键 (侧键)", "back", self.emulator.keys_config['back'])
-        self._create_key_btn(key_layout, "前进键 (侧键)", "forward", self.emulator.keys_config['forward'])
+        self._create_key_btn(key_cl, "上移键", "up", self.emulator.keys_config['up'])
+        self._create_key_btn(key_cl, "下移键", "down", self.emulator.keys_config['down'])
+        self._create_key_btn(key_cl, "左移键", "left", self.emulator.keys_config['left'])
+        self._create_key_btn(key_cl, "右移键", "right", self.emulator.keys_config['right'])
+        self._create_key_btn(key_cl, "左键拖拽/点击", "click_l", self.emulator.keys_config['click_l'])
+        self._create_key_btn(key_cl, "右键拖拽/点击", "click_r", self.emulator.keys_config['click_r'])
+        self._create_key_btn(key_cl, "滚轮向上", "scroll_up", self.emulator.keys_config['scroll_up'])
+        self._create_key_btn(key_cl, "滚轮向下", "scroll_down", self.emulator.keys_config['scroll_down'])
+        self._create_key_btn(key_cl, "窗口居中", "center_window", self.emulator.keys_config['center_window'])
+        self._create_key_btn(key_cl, "后退键 (侧键)", "back", self.emulator.keys_config['back'])
+        self._create_key_btn(key_cl, "前进键 (侧键)", "forward", self.emulator.keys_config['forward'])
+        root.addWidget(key_section)
 
-        left.addWidget(key_card)
+        # ── 曲线设置 ──
+        curve_section = CollapsibleSection("曲线设置", self)
+        curve_cl = curve_section.content_layout()
 
-        # 设置卡片
-        settings_card = CardWidget(self)
-        settings_layout = QVBoxLayout(settings_card)
-        settings_layout.addWidget(SubtitleLabel("设置", self))
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(BodyLabel("曲线预设:", self))
+        self.curve_combo = ComboBox(self)
+        self.curve_combo.addItems([CURVE_LABELS[t] for t in
+                                   (CURVE_LINEAR, CURVE_TRADITIONAL, CURVE_HIGH_SPEED)])
+        self.curve_combo.setCurrentIndex(0)
+        self.curve_combo.currentIndexChanged.connect(self._on_preset_changed)
+        preset_row.addWidget(self.curve_combo)
+        preset_row.addStretch(1)
+        curve_cl.addLayout(preset_row)
 
-        # 独占组合键
+        self.curve_widget = CurveWidget(self)
+        self.curve_widget.setMinimumHeight(180)
+        curve_cl.addWidget(self.curve_widget)
+
+        self._add_param_row(curve_cl, "启动速度 (px/s)", "start_speed",
+                            1000, 0, 50, int)
+        self._add_param_row(curve_cl, "死区 (秒)", "deadzone",
+                            300, 0.0, 0.01, float)
+        self._add_param_row(curve_cl, "最大速度时间 (秒)", "max_time",
+                            500, 1.5, 0.1, float)
+        self._add_param_row(curve_cl, "最大速度 (px/s)", "max_speed",
+                            3000, 1000, 50, int)
+        self._add_param_row(curve_cl, "曲线强度", "intensity",
+                            500, 1.0, 0.1, float)
+        root.addWidget(curve_section)
+
+        # ── 其他设置 ──
+        other_section = CollapsibleSection("其他设置", self)
+        other_cl = other_section.content_layout()
+
         ex_row = QHBoxLayout()
         ex_row.addWidget(BodyLabel("独占组合键:", self))
         ex_row.addStretch(1)
@@ -165,9 +207,8 @@ class MainWindow(MSFluentWindow):
         self.exclusive_switch.setChecked(True)
         self.exclusive_switch.checkedChanged.connect(self._update_exclusive_mod)
         ex_row.addWidget(self.exclusive_switch)
-        settings_layout.addLayout(ex_row)
+        other_cl.addLayout(ex_row)
 
-        # 开机自启
         boot_row = QHBoxLayout()
         boot_row.addWidget(BodyLabel("开机自启:", self))
         boot_row.addStretch(1)
@@ -175,9 +216,16 @@ class MainWindow(MSFluentWindow):
         self.boot_switch.setChecked(_check_boot_reg())
         self.boot_switch.checkedChanged.connect(self._toggle_boot)
         boot_row.addWidget(self.boot_switch)
-        settings_layout.addLayout(boot_row)
+        other_cl.addLayout(boot_row)
 
-        # 滚轮步进
+        hint_row = QHBoxLayout()
+        hint_row.addWidget(BodyLabel("浮空提示窗:", self))
+        hint_row.addStretch(1)
+        self.hint_switch = SwitchButton(self)
+        self.hint_switch.setChecked(True)
+        hint_row.addWidget(self.hint_switch)
+        other_cl.addLayout(hint_row)
+
         scroll_row = QHBoxLayout()
         scroll_row.addWidget(BodyLabel("滚轮步进 (行):", self))
         scroll_row.addStretch(1)
@@ -187,16 +235,17 @@ class MainWindow(MSFluentWindow):
         self.scroll_step_box.setFixedWidth(150)
         self.scroll_step_box.setFixedHeight(32)
         self.scroll_step_box.valueChanged.connect(self._update_curve_params)
+        _no_wheel(self.scroll_step_box)
         scroll_row.addWidget(self.scroll_step_box)
-        settings_layout.addLayout(scroll_row)
+        other_cl.addLayout(scroll_row)
 
-        # 延迟补偿
         lat_row = QHBoxLayout()
         lat_row.addWidget(BodyLabel("延迟补偿 (ms):", self))
         self.latency_slider = QSlider(Qt.Orientation.Horizontal, self)
         self.latency_slider.setRange(0, 500)
         self.latency_slider.setValue(0)
         self.latency_slider.valueChanged.connect(self._on_latency_slider)
+        _no_wheel(self.latency_slider)
         lat_row.addWidget(self.latency_slider, 1)
         calibrate_btn = PushButton("校准", self)
         calibrate_btn.setFixedHeight(32)
@@ -208,16 +257,17 @@ class MainWindow(MSFluentWindow):
         self.latency_box.setFixedWidth(150)
         self.latency_box.setFixedHeight(32)
         self.latency_box.valueChanged.connect(self._on_latency_spinbox)
+        _no_wheel(self.latency_box)
         lat_row.addWidget(self.latency_box)
-        settings_layout.addLayout(lat_row)
+        other_cl.addLayout(lat_row)
 
-        # 补偿阈值
         thr_row = QHBoxLayout()
         thr_row.addWidget(BodyLabel("补偿阈值 (ms):", self))
         self.threshold_slider = QSlider(Qt.Orientation.Horizontal, self)
         self.threshold_slider.setRange(0, 5000)
         self.threshold_slider.setValue(1000)
         self.threshold_slider.valueChanged.connect(self._on_threshold_slider)
+        _no_wheel(self.threshold_slider)
         thr_row.addWidget(self.threshold_slider, 1)
         self.threshold_box = SpinBox(self)
         self.threshold_box.setRange(0, 5000)
@@ -225,16 +275,17 @@ class MainWindow(MSFluentWindow):
         self.threshold_box.setFixedWidth(150)
         self.threshold_box.setFixedHeight(32)
         self.threshold_box.valueChanged.connect(self._on_threshold_spinbox)
+        _no_wheel(self.threshold_box)
         thr_row.addWidget(self.threshold_box)
-        settings_layout.addLayout(thr_row)
+        other_cl.addLayout(thr_row)
 
-        # 回退缓冲
         buf_row = QHBoxLayout()
         buf_row.addWidget(BodyLabel("回退缓冲 (ms):", self))
         self.buffer_slider = QSlider(Qt.Orientation.Horizontal, self)
         self.buffer_slider.setRange(0, 500)
         self.buffer_slider.setValue(0)
         self.buffer_slider.valueChanged.connect(self._on_buffer_slider)
+        _no_wheel(self.buffer_slider)
         buf_row.addWidget(self.buffer_slider, 1)
         self.buffer_box = SpinBox(self)
         self.buffer_box.setRange(0, 500)
@@ -242,10 +293,10 @@ class MainWindow(MSFluentWindow):
         self.buffer_box.setFixedWidth(150)
         self.buffer_box.setFixedHeight(32)
         self.buffer_box.valueChanged.connect(self._on_buffer_spinbox)
+        _no_wheel(self.buffer_box)
         buf_row.addWidget(self.buffer_box)
-        settings_layout.addLayout(buf_row)
+        other_cl.addLayout(buf_row)
 
-        # Alt+Tab 释放自动居中
         alt_row = QHBoxLayout()
         alt_row.addWidget(BodyLabel("Alt+Tab 释放居中:", self))
         alt_row.addStretch(1)
@@ -253,66 +304,31 @@ class MainWindow(MSFluentWindow):
         self.alt_center_switch.setChecked(False)
         self.alt_center_switch.checkedChanged.connect(self._on_alt_center_toggle)
         alt_row.addWidget(self.alt_center_switch)
-        settings_layout.addLayout(alt_row)
+        other_cl.addLayout(alt_row)
 
-        # 清除配置数据
         clear_btn = PushButton("清除配置数据", self)
         clear_btn.setFixedHeight(32)
         clear_btn.clicked.connect(self._clear_data)
-        settings_layout.addWidget(clear_btn)
+        other_cl.addWidget(clear_btn)
 
-        left.addWidget(settings_card)
-        left.addStretch(1)
-        root.addLayout(left, 5)
+        root.addWidget(other_section)
+        root.addStretch(1)
 
-        # ── 右列：曲线可视化 + 曲线参数 ──
-        right = QVBoxLayout()
-        right.setSpacing(10)
-
-        right.addWidget(SubtitleLabel("速度曲线", self))
-
-        # 预设选择
-        preset_row = QHBoxLayout()
-        preset_row.addWidget(BodyLabel("曲线预设:", self))
-        self.curve_combo = ComboBox(self)
-        self.curve_combo.addItems([CURVE_LABELS[t] for t in
-                                   (CURVE_LINEAR, CURVE_TRADITIONAL, CURVE_HIGH_SPEED)])
-        self.curve_combo.setCurrentIndex(0)
-        self.curve_combo.currentIndexChanged.connect(self._on_preset_changed)
-        preset_row.addWidget(self.curve_combo)
-        preset_row.addStretch(1)
-        right.addLayout(preset_row)
-
-        # 曲线图
-        self.curve_widget = CurveWidget(self)
-        self.curve_widget.setMinimumHeight(200)
-        right.addWidget(self.curve_widget)
-
-        # 曲线参数卡片
-        param_card = CardWidget(self)
-        param_layout = QVBoxLayout(param_card)
-        param_layout.setSpacing(8)
-        param_layout.addWidget(SubtitleLabel("曲线参数", self))
-
-        self._add_param_row(param_layout, "启动速度 (px/s)", "start_speed",
-                            1000, 0, 50, int)
-        self._add_param_row(param_layout, "死区 (秒)", "deadzone",
-                            300, 0.0, 0.01, float)
-        self._add_param_row(param_layout, "最大速度时间 (秒)", "max_time",
-                            500, 1.5, 0.1, float)
-        self._add_param_row(param_layout, "最大速度 (px/s)", "max_speed",
-                            3000, 1000, 50, int)
-        self._add_param_row(param_layout, "曲线强度", "intensity",
-                            500, 1.0, 0.1, float)
-
-        right.addWidget(param_card)
-        right.addStretch(1)
-        root.addLayout(right, 4)
+        # ── 默认折叠曲线设置和其他设置 ──
+        curve_section.collapse()
+        other_section.collapse()
 
         # ── 应用初始预设 ──
         self._apply_preset(CURVE_LINEAR)
 
-        self.stackedWidget.addWidget(content)
+        scroll = QScrollArea(self)
+        scroll.setWidget(content)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        scroll.viewport().setAutoFillBackground(False)
+        scroll.viewport().setStyleSheet("background: transparent; border: none;")
+        self.stackedWidget.addWidget(scroll)
 
     # ──────────────────────── 带滑块的参数行 ────────────────────────
     def _add_param_row(self, parent, label, key, slider_max, default, step, val_type):
@@ -323,6 +339,7 @@ class MainWindow(MSFluentWindow):
         slider.setRange(0, slider_max)
         slider.setValue(default if val_type is int else int(default * 100))
         slider.valueChanged.connect(lambda v, k=key: self._on_slider_changed(k, v))
+        _no_wheel(slider)
         row.addWidget(slider, 1)
 
         if val_type is float:
@@ -335,6 +352,7 @@ class MainWindow(MSFluentWindow):
             box.setRange(0, 1000000)
             box.setSingleStep(int(step))
         box.setValue(default)
+        _no_wheel(box)
         box.setFixedHeight(32)
         box.setFixedWidth(150)
         box.valueChanged.connect(lambda v, k=key: self._on_spinbox_changed(k, v))
@@ -461,6 +479,20 @@ class MainWindow(MSFluentWindow):
         self._calibration_win = LatencyCalibrationWindow(
             callback=lambda v: self.latency_box.setValue(v))
         self._calibration_win.show()
+
+    def _poll_hint_state(self):
+        if not self.hint_switch.isChecked():
+            if self._floating_hint.isVisible():
+                self._floating_hint.hide()
+            return
+        em = self.emulator
+        if em.enabled and em.is_mod_pressed and em.mod_mode != 'capslock':
+            if not self._floating_hint.isVisible():
+                self._floating_hint.show()
+            self._floating_hint.reposition()
+        else:
+            if self._floating_hint.isVisible():
+                self._floating_hint.hide()
 
     def _poll_curve_state(self):
         em = self.emulator
@@ -852,6 +884,11 @@ class MainWindow(MSFluentWindow):
         self.boot_switch.setChecked(boot)
         self.boot_switch.blockSignals(False)
 
+        hint = cfg.get('hint_enabled', True)
+        self.hint_switch.blockSignals(True)
+        self.hint_switch.setChecked(hint)
+        self.hint_switch.blockSignals(False)
+
         for key in ('start_speed', 'deadzone', 'max_time', 'max_speed', 'intensity'):
             val = cfg.get(key, 0)
             box = getattr(self, f'_input_{key}')
@@ -959,6 +996,11 @@ class MainWindow(MSFluentWindow):
         self.boot_switch.setChecked(False)
         self.boot_switch.blockSignals(False)
 
+        # 重置浮空提示窗
+        self.hint_switch.blockSignals(True)
+        self.hint_switch.setChecked(True)
+        self.hint_switch.blockSignals(False)
+
         # 重置组合键
         self.emulator.mod_key_id = 'menu'
         self.emulator.mod_vk = 93
@@ -1048,6 +1090,7 @@ class MainWindow(MSFluentWindow):
             'comp_buffer_ms': self.buffer_box.value(),
             'latency_threshold_ms': self.threshold_box.value(),
             'alt_center': self.alt_center_switch.isChecked(),
+            'hint_enabled': self.hint_switch.isChecked(),
         }
         try:
             with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
@@ -1127,6 +1170,8 @@ class MainWindow(MSFluentWindow):
         self._save_config()
         self._curve_timer.stop()
         self._capslock_timer.stop()
+        self._hint_timer.stop()
+        self._floating_hint.hide()
         self.emulator.stop()
         self.listener.stop()
         self.tray.hide()

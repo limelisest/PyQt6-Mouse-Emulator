@@ -192,6 +192,7 @@ class MouseEmulatorThread(QThread):
         self._remainder_y = exact_y - step_y
 
         if step_x != 0 or step_y != 0:
+            ctypes.windll.user32.ShowCursor(True)
             self.mouse_ctrl.move(step_x, step_y)
 
     # ────────────────────────── 延迟补偿 ──────────────────────────
