@@ -85,6 +85,9 @@ class MouseEmulatorThread(QThread):
             'back': 189, 'forward': 187,
         }
         self.vk_to_action = {v: k for k, v in self.vk_config.items()}
+        self.keys_config2 = {}
+        self.vk_config2 = {}
+        self.vk_to_action2 = {}
 
         self.active_directions = set()
         self._keys_held = set()   # 当前按下的 vk

@@ -140,7 +140,7 @@ class MainWindow(MSFluentWindow):
         mod_row = QHBoxLayout()
         mod_row.addWidget(BodyLabel("组合键", self))
         self.mode_combo = ComboBox(self)
-        self.mode_combo.addItems(['按住触发', '按下切换', '大写锁模式'])
+        self.mode_combo.addItems(['按住触发', '按下切换', '混合模式', '大写锁模式'])
         self.mode_combo.setCurrentIndex(0)
         self.mode_combo.currentIndexChanged.connect(self._update_mod_mode)
         mod_row.addWidget(self.mode_combo)
@@ -150,6 +150,12 @@ class MainWindow(MSFluentWindow):
         mod_btn.clicked.connect(lambda: self._start_recording('mod'))
         self.key_buttons['mod'] = mod_btn
         mod_row.addWidget(mod_btn)
+        mod2_btn = PushButton('未设置', self)
+        mod2_btn.setFixedWidth(100)
+        mod2_btn.setFixedHeight(32)
+        mod2_btn.clicked.connect(lambda: self._start_recording('mod2'))
+        self.key_buttons['mod2'] = mod2_btn
+        mod_row.addWidget(mod2_btn)
         key_cl.addLayout(mod_row)
 
         self._create_key_btn(key_cl, "上移键", "up", self.emulator.keys_config['up'])
@@ -486,7 +492,7 @@ class MainWindow(MSFluentWindow):
                 self._floating_hint.hide()
             return
         em = self.emulator
-        if em.enabled and em.is_mod_pressed and em.mod_mode != 'capslock':
+        if em.enabled and (em.is_mod_pressed or em.mod_toggled) and em.mod_mode != 'capslock':
             if not self._floating_hint.isVisible():
                 self._floating_hint.show()
             self._floating_hint.reposition()
@@ -513,8 +519,10 @@ class MainWindow(MSFluentWindow):
         self.emulator.exclusive_mod = checked
 
     def _update_mod_mode(self, index):
-        modes = ['hold', 'toggle', 'capslock']
+        modes = ['hold', 'toggle', 'hybrid', 'capslock']
         self.emulator.mod_mode = modes[index]
+        if modes[index] != 'hybrid':
+            self.emulator.mod_toggled = False
         self._update_capslock_ui()
 
     def _update_capslock_ui(self):
@@ -558,8 +566,16 @@ class MainWindow(MSFluentWindow):
         btn.setFixedHeight(32)
         btn.clicked.connect(lambda _=False, tid=target_id: self._start_recording(tid))
         self.key_buttons[target_id] = btn
+
+        btn2 = PushButton('未设置', self)
+        btn2.setFixedWidth(100)
+        btn2.setFixedHeight(32)
+        btn2.clicked.connect(lambda _=False, tid=target_id + '2': self._start_recording(tid))
+        self.key_buttons[target_id + '2'] = btn2
+
         row.addStretch(1)
         row.addWidget(btn)
+        row.addWidget(btn2)
         parent_layout.addLayout(row)
 
     # ══════════════════════════ 按键录制 ══════════════════════════
@@ -573,18 +589,48 @@ class MainWindow(MSFluentWindow):
             self.key_buttons[target_id].setText("录制失败")
             self._save_config()
             return
-        self.key_buttons[target_id].setText(key_id.upper())
-        if target_id == 'mod':
+
+        is_esc = key_id == 'esc'
+        is_secondary = target_id.endswith('2')
+        base_id = target_id[:-1] if is_secondary else target_id
+
+        if base_id == 'mod':
+            if is_esc:
+                key_id = 'menu'
+                vk = 93
             self.emulator.mod_key_id = key_id
             if vk is not None:
                 self.emulator.mod_vk = vk
+            self.key_buttons[target_id].setText(key_id.upper())
+        elif is_secondary:
+            if is_esc:
+                self.emulator.keys_config2.pop(base_id, None)
+                old_vk = self.emulator.vk_config2.pop(base_id, None)
+                if old_vk:
+                    self.emulator.vk_to_action2.pop(old_vk, None)
+                self.key_buttons[target_id].setText('未设置')
+            else:
+                self.emulator.keys_config2[base_id] = key_id
+                if vk is None and len(key_id) == 1:
+                    vk = ord(key_id.upper())
+                if vk is not None:
+                    self.emulator.vk_config2[base_id] = vk
+                    self.emulator.vk_to_action2[vk] = base_id
+                self.key_buttons[target_id].setText(key_id.upper())
         else:
-            self.emulator.keys_config[target_id] = key_id
-            if vk is None and len(key_id) == 1:
-                vk = ord(key_id.upper())
-            if vk is not None:
-                self.emulator.vk_config[target_id] = vk
+            if is_esc:
+                self.emulator.keys_config[target_id] = ''
+                self.emulator.vk_config.pop(target_id, None)
                 self.emulator.vk_to_action = {v: k for k, v in self.emulator.vk_config.items()}
+                self.key_buttons[target_id].setText('未设置')
+            else:
+                self.emulator.keys_config[target_id] = key_id
+                if vk is None and len(key_id) == 1:
+                    vk = ord(key_id.upper())
+                if vk is not None:
+                    self.emulator.vk_config[target_id] = vk
+                    self.emulator.vk_to_action = {v: k for k, v in self.emulator.vk_config.items()}
+                self.key_buttons[target_id].setText(key_id.upper())
         self._save_config()
 
     # ══════════════════════════ 键盘监听 ══════════════════════════
@@ -604,6 +650,12 @@ class MainWindow(MSFluentWindow):
         vk = data.vkCode
         is_press = msg in (256, 260)
         is_release = msg in (257, 261)
+
+        # ── 追踪当前按下的键 ──
+        if is_press:
+            self.emulator._keys_held.add(vk)
+        elif is_release:
+            self.emulator._keys_held.discard(vk)
 
         # ── Alt+Tab 跟踪（仅在启动键按下时）──
         if self.emulator.is_mod_pressed and self.alt_center_switch.isChecked():
@@ -638,6 +690,25 @@ class MainWindow(MSFluentWindow):
                     if not self.emulator.mod_toggled:
                         self._safe_release_mouse()
                 self.listener.suppress_event()
+            elif self.emulator.mod_mode == 'hybrid':
+                HYBRID_THRESHOLD = 0.5
+                if is_press:
+                    self.emulator.is_mod_pressed = True
+                    self.emulator._mod_used = False
+                    self.emulator._mod_press_time = time.time()
+                    self.listener.suppress_event()
+                elif is_release:
+                    held = time.time() - self.emulator._mod_press_time
+                    if held < HYBRID_THRESHOLD:
+                        self.emulator.mod_toggled = not self.emulator.mod_toggled
+                        self.emulator.is_mod_pressed = self.emulator.mod_toggled
+                        if not self.emulator.mod_toggled:
+                            self._safe_release_mouse()
+                    else:
+                        self.emulator.mod_toggled = False
+                        self.emulator.is_mod_pressed = False
+                        self._safe_release_mouse()
+                    self.listener.suppress_event()
             else:
                 # 按住模式：按下立即抑制，0.2s 内无动作则注入原生单击
                 TAP_THRESHOLD = 0.2
@@ -651,15 +722,14 @@ class MainWindow(MSFluentWindow):
                     self.emulator.is_mod_pressed = False
                     self._safe_release_mouse()
                     if held < TAP_THRESHOLD and not self.emulator._mod_used:
-                        # 快按：注入原生按键单击
                         self._inject_modifier_tap()
                     else:
                         self.listener.suppress_event()
             return True
 
         if self.emulator.is_mod_pressed:
-            if vk in self.emulator.vk_to_action:
-                action = self.emulator.vk_to_action[vk]
+            action = self.emulator.vk_to_action.get(vk) or self.emulator.vk_to_action2.get(vk)
+            if action:
                 if is_press:
                     self._trigger_action_press(action)
                 elif is_release:
@@ -667,6 +737,8 @@ class MainWindow(MSFluentWindow):
                 self.listener.suppress_event()
             elif vk in (9, 18, 164, 165) and self.alt_center_switch.isChecked():
                 pass  # 放行 Alt/Tab 以支持窗口切换
+            elif vk in (90, 88, 67, 86) and (ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000):
+                pass  # 放行 Ctrl+Z/X/C/V
             else:
                 self.listener.suppress_event()
 
@@ -702,6 +774,10 @@ class MainWindow(MSFluentWindow):
                 self.emulator.is_mod_pressed = self.emulator.mod_toggled
                 if not self.emulator.mod_toggled:
                     self._safe_release_mouse()
+            elif self.emulator.mod_mode == 'hybrid':
+                self.emulator.is_mod_pressed = True
+                self.emulator._mod_used = False
+                self.emulator._mod_press_time = time.time()
             else:
                 self.emulator.is_mod_pressed = True
         if not self.emulator.is_mod_pressed:
@@ -732,6 +808,19 @@ class MainWindow(MSFluentWindow):
 
         if key_id == self.emulator.mod_key_id:
             if self.emulator.mod_mode == 'toggle':
+                return
+            elif self.emulator.mod_mode == 'hybrid':
+                HYBRID_THRESHOLD = 0.5
+                held = time.time() - self.emulator._mod_press_time
+                if held < HYBRID_THRESHOLD:
+                    self.emulator.mod_toggled = not self.emulator.mod_toggled
+                    self.emulator.is_mod_pressed = self.emulator.mod_toggled
+                    if not self.emulator.mod_toggled:
+                        self._safe_release_mouse()
+                else:
+                    self.emulator.mod_toggled = False
+                    self.emulator.is_mod_pressed = False
+                    self._safe_release_mouse()
                 return
             self.emulator.is_mod_pressed = False
             self._safe_release_mouse()
@@ -837,7 +926,10 @@ class MainWindow(MSFluentWindow):
 
     def _get_action_by_key_id(self, key_id):
         for action, mapped_id in self.emulator.keys_config.items():
-            if mapped_id == key_id:
+            if mapped_id and mapped_id == key_id:
+                return action
+        for action, mapped_id in self.emulator.keys_config2.items():
+            if mapped_id and mapped_id == key_id:
                 return action
         return None
 
@@ -860,7 +952,7 @@ class MainWindow(MSFluentWindow):
 
         mod_mode = cfg.get('mod_mode', 'hold')
         self.emulator.mod_mode = mod_mode
-        mode_index = {'hold': 0, 'toggle': 1, 'capslock': 2}.get(mod_mode, 0)
+        mode_index = {'hold': 0, 'toggle': 1, 'hybrid': 2, 'capslock': 3}.get(mod_mode, 0)
         self.mode_combo.setCurrentIndex(mode_index)
         self._update_capslock_ui()
 
@@ -960,6 +1052,16 @@ class MainWindow(MSFluentWindow):
         if mod_btn:
             mod_btn.setText(mod_id.upper())
 
+        keys2 = cfg.get('keys_config2', {})
+        self.emulator.keys_config2 = dict(keys2)
+        vks2 = cfg.get('vk_config2', {})
+        self.emulator.vk_config2 = {k: int(v) for k, v in vks2.items() if v}
+        self.emulator.vk_to_action2 = {v: k for k, v in self.emulator.vk_config2.items()}
+        for action, key_id in keys2.items():
+            btn = self.key_buttons.get(action + '2')
+            if btn:
+                btn.setText(key_id.upper())
+
     def _clear_data(self):
         """清除所有配置数据，恢复默认设置"""
         if os.path.exists(CONFIG_PATH):
@@ -1031,6 +1133,14 @@ class MainWindow(MSFluentWindow):
             if btn:
                 btn.setText(key_id.upper())
 
+        # 重置备用按键
+        self.emulator.keys_config2.clear()
+        self.emulator.vk_config2.clear()
+        for action_id in default_keys:
+            btn2 = self.key_buttons.get(action_id + '2')
+            if btn2:
+                btn2.setText('未设置')
+
         # 重置滚轮步进
         self.emulator.scroll_step = 3
         self.scroll_step_box.blockSignals(True)
@@ -1080,6 +1190,8 @@ class MainWindow(MSFluentWindow):
             'mod_vk': self.emulator.mod_vk,
             'keys_config': dict(self.emulator.keys_config),
             'vk_config': {k: int(v) for k, v in self.emulator.vk_config.items() if v is not None},
+            'keys_config2': dict(self.emulator.keys_config2),
+            'vk_config2': {k: int(v) for k, v in self.emulator.vk_config2.items() if v is not None},
             'start_speed': self._input_start_speed.value(),
             'deadzone': self._input_deadzone.value(),
             'max_time': self._input_max_time.value(),
