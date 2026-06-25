@@ -158,6 +158,7 @@ class MainWindow(MSFluentWindow):
         mod_row.addWidget(mod2_btn)
         key_cl.addLayout(mod_row)
 
+        self._create_key_btn(key_cl, "退出组合键", "exit_mod", '未设置')
         self._create_key_btn(key_cl, "上移键", "up", self.emulator.keys_config['up'])
         self._create_key_btn(key_cl, "下移键", "down", self.emulator.keys_config['down'])
         self._create_key_btn(key_cl, "左移键", "left", self.emulator.keys_config['left'])
@@ -166,9 +167,9 @@ class MainWindow(MSFluentWindow):
         self._create_key_btn(key_cl, "右键拖拽/点击", "click_r", self.emulator.keys_config['click_r'])
         self._create_key_btn(key_cl, "滚轮向上", "scroll_up", self.emulator.keys_config['scroll_up'])
         self._create_key_btn(key_cl, "滚轮向下", "scroll_down", self.emulator.keys_config['scroll_down'])
-        self._create_key_btn(key_cl, "窗口居中", "center_window", self.emulator.keys_config['center_window'])
         self._create_key_btn(key_cl, "后退键 (侧键)", "back", self.emulator.keys_config['back'])
         self._create_key_btn(key_cl, "前进键 (侧键)", "forward", self.emulator.keys_config['forward'])
+        self._create_key_btn(key_cl, "窗口居中", "center_window", self.emulator.keys_config['center_window'])
         root.addWidget(key_section)
 
         # ── 曲线设置 ──
@@ -311,6 +312,8 @@ class MainWindow(MSFluentWindow):
         self.alt_center_switch.checkedChanged.connect(self._on_alt_center_toggle)
         alt_row.addWidget(self.alt_center_switch)
         other_cl.addLayout(alt_row)
+
+
 
         clear_btn = PushButton("清除配置数据", self)
         clear_btn.setFixedHeight(32)
@@ -557,6 +560,8 @@ class MainWindow(MSFluentWindow):
     def _on_alt_center_toggle(self, checked):
         pass
 
+
+
     # ──────────────────────── 按键绑定 UI ────────────────────────
     def _create_key_btn(self, parent_layout, label_text, target_id, default_val):
         row = QHBoxLayout()
@@ -596,12 +601,17 @@ class MainWindow(MSFluentWindow):
 
         if base_id == 'mod':
             if is_esc:
-                key_id = 'menu'
-                vk = 93
-            self.emulator.mod_key_id = key_id
-            if vk is not None:
-                self.emulator.mod_vk = vk
-            self.key_buttons[target_id].setText(key_id.upper())
+                if is_secondary:
+                    key_id = ''
+                    vk = None
+                else:
+                    key_id = 'menu'
+                    vk = 93
+            if key_id:
+                self.emulator.mod_key_id = key_id
+                if vk is not None:
+                    self.emulator.mod_vk = vk
+            self.key_buttons[target_id].setText(key_id.upper() if key_id else '未设置')
         elif is_secondary:
             if is_esc:
                 self.emulator.keys_config2.pop(base_id, None)
@@ -673,8 +683,8 @@ class MainWindow(MSFluentWindow):
             if vk == 0x14:  # VK_CAPITAL
                 return True
             if self.emulator.is_mod_pressed:
-                if vk in self.emulator.vk_to_action:
-                    action = self.emulator.vk_to_action[vk]
+                action = self.emulator.vk_to_action.get(vk) or self.emulator.vk_to_action2.get(vk)
+                if action:
                     if is_press:
                         self._trigger_action_press(action)
                     elif is_release:
@@ -728,6 +738,14 @@ class MainWindow(MSFluentWindow):
             return True
 
         if self.emulator.is_mod_pressed:
+            # 检查退出组合键
+            if vk in (self.emulator.vk_config.get('exit_mod'), self.emulator.vk_config2.get('exit_mod')):
+                self.emulator.mod_toggled = False
+                self.emulator.is_mod_pressed = False
+                self._safe_release_mouse()
+                self.listener.suppress_event()
+                return True
+
             action = self.emulator.vk_to_action.get(vk) or self.emulator.vk_to_action2.get(vk)
             if action:
                 if is_press:
@@ -735,12 +753,7 @@ class MainWindow(MSFluentWindow):
                 elif is_release:
                     self._trigger_action_release(action)
                 self.listener.suppress_event()
-            elif vk in (9, 18, 164, 165) and self.alt_center_switch.isChecked():
-                pass  # 放行 Alt/Tab 以支持窗口切换
-            elif vk in (90, 88, 67, 86) and (ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000):
-                pass  # 放行 Ctrl+Z/X/C/V
-            else:
-                self.listener.suppress_event()
+                return True
 
         return True
 
@@ -766,6 +779,15 @@ class MainWindow(MSFluentWindow):
             action = self._get_action_by_key_id(key_id)
             if action:
                 self._trigger_action_press(action)
+            return
+
+        if self.emulator.is_mod_pressed and key_id in (
+            self.emulator.keys_config.get('exit_mod'),
+            self.emulator.keys_config2.get('exit_mod'),
+        ):
+            self.emulator.mod_toggled = False
+            self.emulator.is_mod_pressed = False
+            self._safe_release_mouse()
             return
 
         if key_id == self.emulator.mod_key_id:
@@ -1035,14 +1057,16 @@ class MainWindow(MSFluentWindow):
         # ── 恢复按键绑定 ──
         saved_keys = cfg.get('keys_config', {})
         for action, key_id in saved_keys.items():
-            if action in self.emulator.keys_config:
+            if action not in self.emulator.keys_config:
+                self.emulator.keys_config[action] = ''
+            if key_id:
                 self.emulator.keys_config[action] = key_id
-                btn = self.key_buttons.get(action)
-                if btn:
-                    btn.setText(key_id.upper())
+            btn = self.key_buttons.get(action)
+            if btn:
+                btn.setText(key_id.upper() if key_id else '未设置')
         saved_vks = cfg.get('vk_config', {})
         for action, vk in saved_vks.items():
-            if action in self.emulator.vk_config and vk:
+            if vk:
                 self.emulator.vk_config[action] = int(vk)
         self.emulator.vk_to_action = {v: k for k, v in self.emulator.vk_config.items()}
         mod_id = cfg.get('mod_key_id', 'menu')
@@ -1136,10 +1160,18 @@ class MainWindow(MSFluentWindow):
         # 重置备用按键
         self.emulator.keys_config2.clear()
         self.emulator.vk_config2.clear()
-        for action_id in default_keys:
+        self.emulator.vk_to_action2.clear()
+        for action_id in list(default_keys) + ['exit_mod']:
             btn2 = self.key_buttons.get(action_id + '2')
             if btn2:
                 btn2.setText('未设置')
+
+        # 重置退出组合键
+        self.emulator.keys_config.pop('exit_mod', None)
+        self.emulator.vk_config.pop('exit_mod', None)
+        btn_exit = self.key_buttons.get('exit_mod')
+        if btn_exit:
+            btn_exit.setText('未设置')
 
         # 重置滚轮步进
         self.emulator.scroll_step = 3

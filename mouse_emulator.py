@@ -112,6 +112,8 @@ class MouseEmulatorThread(QThread):
 
         # ── 内部状态 ──
         self._current_speed = 0.0
+        self._mod_used = False
+        self._mod_press_time = 0.0
         self._time_held = 0.0
         self._loop_delay = 0.01
         self._remainder_x = 0.0
