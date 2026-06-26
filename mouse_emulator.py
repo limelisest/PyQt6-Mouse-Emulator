@@ -110,6 +110,8 @@ class MouseEmulatorThread(QThread):
         self.comp_buffer_ms = 0  # 回退缓冲时间（毫秒），0 = 瞬移
         self.latency_threshold_ms = 1000  # 补偿阈值（毫秒），按下超过此时长才触发
 
+        self.mouse_exit_mod = False
+
         # ── 内部状态 ──
         self._current_speed = 0.0
         self._mod_used = False

@@ -199,6 +199,7 @@ class MainWindow(MSFluentWindow):
                             500, 1.5, 0.1, float)
         self._add_param_row(curve_cl, "最大速度 (px/s)", "max_speed",
                             3000, 1000, 50, int)
+        self._input_max_speed.setMinimum(1)
         self._add_param_row(curve_cl, "曲线强度", "intensity",
                             500, 1.0, 0.1, float)
         root.addWidget(curve_section)
@@ -312,6 +313,15 @@ class MainWindow(MSFluentWindow):
         self.alt_center_switch.checkedChanged.connect(self._on_alt_center_toggle)
         alt_row.addWidget(self.alt_center_switch)
         other_cl.addLayout(alt_row)
+
+        mouse_exit_row = QHBoxLayout()
+        mouse_exit_row.addWidget(BodyLabel("检测到鼠标输入后退出模拟:", self))
+        mouse_exit_row.addStretch(1)
+        self.mouse_exit_switch = SwitchButton(self)
+        self.mouse_exit_switch.setChecked(False)
+        self.mouse_exit_switch.checkedChanged.connect(self._on_mouse_exit_toggle)
+        mouse_exit_row.addWidget(self.mouse_exit_switch)
+        other_cl.addLayout(mouse_exit_row)
 
 
 
@@ -560,7 +570,8 @@ class MainWindow(MSFluentWindow):
     def _on_alt_center_toggle(self, checked):
         pass
 
-
+    def _on_mouse_exit_toggle(self, checked):
+        self.emulator.mouse_exit_mod = checked
 
     # ──────────────────────── 按键绑定 UI ────────────────────────
     def _create_key_btn(self, parent_layout, label_text, target_id, default_val):
@@ -650,6 +661,20 @@ class MainWindow(MSFluentWindow):
             kwargs['win32_event_filter'] = self._win32_event_filter
         self.listener = keyboard.Listener(**kwargs)
         self.listener.start()
+
+        mouse_kwargs = {}
+        if sys.platform == 'win32':
+            mouse_kwargs['win32_event_filter'] = self._mouse_win32_filter
+        self.mouse_listener = mouse.Listener(**mouse_kwargs)
+        self.mouse_listener.start()
+
+    def _mouse_win32_filter(self, msg, data):
+        if self.emulator.mouse_exit_mod and self.emulator.is_mod_pressed:
+            if not (data.flags & 0x01):  # LLMHF_INJECTED → real hardware input
+                self.emulator.mod_toggled = False
+                self.emulator.is_mod_pressed = False
+                self._safe_release_mouse()
+        return True
 
     def _win32_event_filter(self, msg, data):
         if self.recording_target:
@@ -1051,6 +1076,12 @@ class MainWindow(MSFluentWindow):
         self.alt_center_switch.setChecked(alt)
         self.alt_center_switch.blockSignals(False)
 
+        mouse_exit = cfg.get('mouse_exit_mod', False)
+        self.mouse_exit_switch.blockSignals(True)
+        self.mouse_exit_switch.setChecked(mouse_exit)
+        self.mouse_exit_switch.blockSignals(False)
+        self.emulator.mouse_exit_mod = mouse_exit
+
         self._sync_emulator()
         self._update_curve_params()
 
@@ -1207,6 +1238,11 @@ class MainWindow(MSFluentWindow):
         self.alt_center_switch.setChecked(False)
         self.alt_center_switch.blockSignals(False)
 
+        self.mouse_exit_switch.blockSignals(True)
+        self.mouse_exit_switch.setChecked(False)
+        self.mouse_exit_switch.blockSignals(False)
+        self.emulator.mouse_exit_mod = False
+
         self._sync_emulator()
         self._update_curve_params()
         self._save_config()
@@ -1234,6 +1270,7 @@ class MainWindow(MSFluentWindow):
             'comp_buffer_ms': self.buffer_box.value(),
             'latency_threshold_ms': self.threshold_box.value(),
             'alt_center': self.alt_center_switch.isChecked(),
+            'mouse_exit_mod': self.mouse_exit_switch.isChecked(),
             'hint_enabled': self.hint_switch.isChecked(),
         }
         try:

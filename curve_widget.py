@@ -105,13 +105,14 @@ class CurveWidget(QWidget):
         p.setFont(font)
         p.setPen(label_color)
         display_time = max(self.max_time, 0.1)
+        safe_max_speed = max(self.max_speed, 1)
         for i in range(6):
             t = display_time * i / 5
             x = plot_left + plot_w * (t / display_time)
             p.drawText(int(x) - 20, int(plot_bottom + 18), 40, 16,
                        Qt.AlignmentFlag.AlignCenter, f'{t:.1f}s')
         for i in range(6):
-            s = self.max_speed * i / 5
+            s = safe_max_speed * i / 5
             y = plot_bottom - plot_h * i / 5
             p.drawText(2, int(y) - 8, self.MARGIN_LEFT - 6, 16,
                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
@@ -156,7 +157,7 @@ class CurveWidget(QWidget):
                 self.deadzone, self.max_time, self.start_speed, self.max_speed, self.intensity,
             )
             px = plot_left + plot_w * (t / display_time)
-            py = plot_bottom - plot_h * (v / self.max_speed)
+            py = plot_bottom - plot_h * (v / safe_max_speed)
             if first:
                 path.moveTo(px, py)
                 first = False
@@ -171,7 +172,7 @@ class CurveWidget(QWidget):
         # ── 当前实时位置光点 ──
         if self._current_held > 0 and self._current_speed > 0:
             cx = plot_left + plot_w * min(self._current_held / display_time, 1.0)
-            cy = plot_bottom - plot_h * min(self._current_speed / self.max_speed, 1.0)
+            cy = plot_bottom - plot_h * min(self._current_speed / safe_max_speed, 1.0)
 
             glow = QColor(curve_color.red(), curve_color.green(), curve_color.blue(), 60)
             p.setBrush(glow)
