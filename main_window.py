@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent
 from PyQt6.QtGui import QIcon, QAction
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSystemTrayIcon, QMenu, QApplication,
-    QSlider, QLabel, QScrollArea,
+    QSlider, QLabel, QScrollArea, QMessageBox,
 )
 from qfluentwidgets import (
     SpinBox, DoubleSpinBox, SwitchButton, CardWidget,
@@ -68,6 +68,28 @@ def _check_boot_reg():
         return False
 
 
+def _is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+
+def _relaunch_as_admin():
+    import subprocess
+    if getattr(sys, 'frozen', False):
+        target = sys.executable
+    else:
+        base = os.path.splitext(sys.executable)[0]
+        target = base + 'w.exe'
+        if not os.path.exists(target):
+            target = sys.executable
+    args = subprocess.list2cmdline(sys.argv)
+    ctypes.windll.shell32.ShellExecuteW(
+        None, "runas", target, args, None, 1
+    )
+
+
 class MainWindow(MSFluentWindow):
     key_recorded_signal = pyqtSignal(str, str, object)
 
@@ -94,6 +116,14 @@ class MainWindow(MSFluentWindow):
         self._init_ui()
         self._init_tray()
         self._load_config()
+
+        # ── 管理员权限检查 ──
+        self._admin_relaunching = False
+        if self.admin_switch.isChecked() and not _is_admin():
+            _relaunch_as_admin()
+            self._admin_relaunching = True
+            return
+
         self.key_recorded_signal.connect(self._handle_key_recorded)
         self._init_listener()
         self.emulator.start()
@@ -225,6 +255,15 @@ class MainWindow(MSFluentWindow):
         self.boot_switch.checkedChanged.connect(self._toggle_boot)
         boot_row.addWidget(self.boot_switch)
         other_cl.addLayout(boot_row)
+
+        admin_row = QHBoxLayout()
+        admin_row.addWidget(BodyLabel("管理员提权:", self))
+        admin_row.addStretch(1)
+        self.admin_switch = SwitchButton(self)
+        self.admin_switch.setChecked(False)
+        self.admin_switch.checkedChanged.connect(self._on_admin_toggle)
+        admin_row.addWidget(self.admin_switch)
+        other_cl.addLayout(admin_row)
 
         hint_row = QHBoxLayout()
         hint_row.addWidget(BodyLabel("浮空提示窗:", self))
@@ -566,6 +605,23 @@ class MainWindow(MSFluentWindow):
             self.emulator.mouse_ctrl.position = (x, y)
         except Exception:
             pass
+
+    def _on_admin_toggle(self, checked):
+        if checked and not _is_admin():
+            reply = QMessageBox.question(
+                self, "管理员提权",
+                "启用管理员提权后，程序将以管理员权限运行。\n"
+                "此设置将在下次启动时生效。\n\n"
+                "是否立即重启应用？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._save_config()
+                _relaunch_as_admin()
+                QApplication.quit()
+                return
+        self._save_config()
 
     def _on_alt_center_toggle(self, checked):
         pass
@@ -1082,6 +1138,11 @@ class MainWindow(MSFluentWindow):
         self.mouse_exit_switch.blockSignals(False)
         self.emulator.mouse_exit_mod = mouse_exit
 
+        admin = cfg.get('admin_enabled', False)
+        self.admin_switch.blockSignals(True)
+        self.admin_switch.setChecked(admin)
+        self.admin_switch.blockSignals(False)
+
         self._sync_emulator()
         self._update_curve_params()
 
@@ -1243,6 +1304,10 @@ class MainWindow(MSFluentWindow):
         self.mouse_exit_switch.blockSignals(False)
         self.emulator.mouse_exit_mod = False
 
+        self.admin_switch.blockSignals(True)
+        self.admin_switch.setChecked(False)
+        self.admin_switch.blockSignals(False)
+
         self._sync_emulator()
         self._update_curve_params()
         self._save_config()
@@ -1272,6 +1337,7 @@ class MainWindow(MSFluentWindow):
             'alt_center': self.alt_center_switch.isChecked(),
             'mouse_exit_mod': self.mouse_exit_switch.isChecked(),
             'hint_enabled': self.hint_switch.isChecked(),
+            'admin_enabled': self.admin_switch.isChecked(),
         }
         try:
             with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
