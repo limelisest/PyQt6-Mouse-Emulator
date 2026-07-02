@@ -633,7 +633,7 @@ class MainWindow(MSFluentWindow):
     def _create_key_btn(self, parent_layout, label_text, target_id, default_val):
         row = QHBoxLayout()
         row.addWidget(BodyLabel(label_text, self))
-        btn = PushButton(str(default_val).upper(), self)
+        btn = PushButton(default_val.upper() if default_val else '未设置', self)
         btn.setFixedWidth(100)
         btn.setFixedHeight(32)
         btn.clicked.connect(lambda _=False, tid=target_id: self._start_recording(tid))
@@ -1149,10 +1149,7 @@ class MainWindow(MSFluentWindow):
         # ── 恢复按键绑定 ──
         saved_keys = cfg.get('keys_config', {})
         for action, key_id in saved_keys.items():
-            if action not in self.emulator.keys_config:
-                self.emulator.keys_config[action] = ''
-            if key_id:
-                self.emulator.keys_config[action] = key_id
+            self.emulator.keys_config[action] = key_id if key_id else ''
             btn = self.key_buttons.get(action)
             if btn:
                 btn.setText(key_id.upper() if key_id else '未设置')
@@ -1160,6 +1157,9 @@ class MainWindow(MSFluentWindow):
         for action, vk in saved_vks.items():
             if vk:
                 self.emulator.vk_config[action] = int(vk)
+        for action, key_id in self.emulator.keys_config.items():
+            if not key_id:
+                self.emulator.vk_config.pop(action, None)
         self.emulator.vk_to_action = {v: k for k, v in self.emulator.vk_config.items()}
         mod_id = cfg.get('mod_key_id', 'menu')
         self.emulator.mod_key_id = mod_id
@@ -1231,14 +1231,13 @@ class MainWindow(MSFluentWindow):
             'up': 'w', 'down': 's', 'left': 'a', 'right': 'd',
             'click_l': '[', 'click_r': ']',
             'scroll_up': 'p', 'scroll_down': ';',
-            'center_window': 'c',
+            'center_window': '',
             'back': '-', 'forward': '=',
         }
         default_vks = {
             'up': 87, 'down': 83, 'left': 65, 'right': 68,
             'click_l': 219, 'click_r': 221,
             'scroll_up': 80, 'scroll_down': 186,
-            'center_window': 67,
             'back': 189, 'forward': 187,
         }
         self.emulator.keys_config = dict(default_keys)
@@ -1247,7 +1246,7 @@ class MainWindow(MSFluentWindow):
         for action_id, key_id in default_keys.items():
             btn = self.key_buttons.get(action_id)
             if btn:
-                btn.setText(key_id.upper())
+                btn.setText(key_id.upper() if key_id else '未设置')
 
         # 重置备用按键
         self.emulator.keys_config2.clear()
